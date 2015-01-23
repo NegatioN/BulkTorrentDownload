@@ -4,6 +4,8 @@ __author__ = 'Joakim Rishaug'
 # -*- coding: utf-8 -*-
 # Agreement: You can use, modify, or redistribute this tool under the terms of GNU General Public License (GPLv3).
 # This tool is for educational purposes only. Any damage you make will not affect the author.
+
+#Inspired by pantuts' https://github.com/pantuts/asskick kickass torrent-console.
 # Dependencies:
 # requests: https://pypi.python.org/pypi/requests
 # beautifulSoup4: https://pypi.python.org/pypi/beautifulsoup4/4.3.2
@@ -16,22 +18,15 @@ import requests
 import subprocess
 import sys
 import tabulate
-import collections
-from enum import Enum
+import time
+
+#TODO implement graphical progress-bar?
 
 class OutColors:
     DEFAULT = '\033[0m'
     BW = '\033[1m'
     LG = '\033[0m\033[32m'
     LR = '\033[0m\033[31m'
-    SEEDER = '\033[1m\033[32m'
-    LEECHER = '\033[1m\033[31m'
-
-#enum for resolution setting for user
-class Resolutions(Enum):
-    high = 1080
-    medium = 720
-    low = 480
 
 def helper():
     print(OutColors.DEFAULT + "\nSearch torrents from Animetake.com")
@@ -101,7 +96,7 @@ def download_all_torrents(link):
 
 
 def download_torrent(title, url):
-    print(OutColors.BW + 'Download >> ' + title)
+    print(OutColors.BW + 'Downloading >> ' + title)
     fname = os.getcwd() + '/' + title + '.torrent'
     # http://stackoverflow.com/a/14114741/1302018
     try:
@@ -126,6 +121,7 @@ def aksearch():
     after_url = '&x=0&y=0'
 
     query = input('Type query: ')
+    start = time.clock()
 
     #replace space with + for search
     query = query.replace(" ", "+")
@@ -135,6 +131,7 @@ def aksearch():
     #holds all links to series in search
     href = []
 
+#producer-part
     print("searching...")
     cont = getContents(url)
     count = 0
@@ -186,9 +183,7 @@ def aksearch():
             url = link + 'page/' + str(seriesPageNum)
             nextCont = getContents(url)
 
-    #count number of links in the last page. a page holds 28 links
-
-        curSize += ((seriesPageNum-2)*28)
+        curSize += ((seriesPageNum-2)*28) #a page has 28 episodes max
     ### Counts the number of episodes on the current series site
         for ul in newSoup.find_all("ul", {'class': 'catg_list'}):
             for li in ul.findAll('li'):
@@ -205,8 +200,9 @@ def aksearch():
     print()
     print(tabulate.tabulate(table, headers=['No.', 'Title', 'Episodes']))
 
-    #TODO let script download all torrents of selected series.
-    #TODO implement resolution-setting.
+    end = time.clock()      #time end
+    spent = end-start
+    print("time: " + str(spent)) #print time spent searching + counting
 
     # torrent selection
     print('\nSelect torrent: [ 1 - ' + str(len(href)) + ' ] or [ M ] to go back to main menu or [ Q ] to quit')
@@ -219,7 +215,6 @@ def aksearch():
         if int(torrent) <= 0 or int(torrent) > len(href):
             print('Use eyeglasses...')
         else:
-            #TODO define download all torrent-function
             download_all_torrents(href[int(torrent)-1])
             #fname = download_torrent(href[int(torrent)-1])
             #subprocess.Popen(['xdg-open', fname], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
