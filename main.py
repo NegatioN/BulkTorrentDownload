@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from multiprocessing.pool import ThreadPool
+
 __author__ = 'Joakim Rishaug'
 
 # -*- coding: utf-8 -*-
@@ -20,7 +22,44 @@ import sys
 import tabulate
 import time
 
+
+
 #TODO implement graphical progress-bar?
+#TODO implement sorting of output series-list
+
+#consume a series and count all episodes per thread.
+def countEpisodes(*linkarr):  #hack way of getting the object which is somehow split into an array of chars???
+    link = ""
+    for char in linkarr:
+        link += char
+
+    #define name of the series.
+    name=link.replace("http://www.animetake.com/anime/", "")
+    name=name.replace("-", " ")
+    name=name.replace("/", "")
+
+
+    seriesPageNum = 1
+    url = link + 'page/' + str(seriesPageNum)
+    nextCont = getContents(url)
+
+    curSize = 0
+
+    while nextCont.status_code != 404:
+        newCont = nextCont
+        newSoup = BeautifulSoup(newCont.content)
+
+        seriesPageNum+=1
+        url = link + 'page/' + str(seriesPageNum)
+        nextCont = getContents(url)
+
+    curSize += ((seriesPageNum-2)*28) #a page has 28 episodes max
+### Counts the number of episodes on the current series site
+    for ul in newSoup.find_all("ul", {'class': 'catg_list'}):
+        for li in ul.findAll('li'):
+            curSize+=1
+    nameSize = name, str(curSize), link
+    return nameSize
 
 class OutColors:
     DEFAULT = '\033[0m'
@@ -149,53 +188,35 @@ def aksearch():
         cont = getContents(url)
 
 
-
     # check if no torrents found
     if len(href) == 0:
         print('Series found: 0')
         aksearch()
 
     ###Do all remaining operations for all series-links gathered.
-    title = []
-    #goes through all hrefs to get the name of the series
-    #also removes titles which does not have /Query/ in them
-    for seriestitle in href:
-        name=seriestitle.replace("http://www.animetake.com/anime/", "")
-        name=name.replace("-", " ")
-        name=name.replace("/", "")
-        title.append(name)
-
     #gets number of episode-links for the given series (aka episodes to download)
-    size = []
+    nameplussize = []
     print("Counting episodes...")
-    for link in href:
-        seriesPageNum = 1
-        url = link + 'page/' + str(seriesPageNum)
-        nextCont = getContents(url)
+    pool = ThreadPool(processes=5) #number of threads to run.
+    holder = href
 
-        curSize = 0
-
-        while nextCont.status_code != 404:
-            newCont = nextCont
-            newSoup = BeautifulSoup(newCont.content)
-
-            seriesPageNum+=1
-            url = link + 'page/' + str(seriesPageNum)
-            nextCont = getContents(url)
-
-        curSize += ((seriesPageNum-2)*28) #a page has 28 episodes max
-    ### Counts the number of episodes on the current series site
-        for ul in newSoup.find_all("ul", {'class': 'catg_list'}):
-            for li in ul.findAll('li'):
-                curSize+=1
-        size.append(str(curSize))
+    while(len(holder) > 0):
+        obj = holder.pop()
+        async_result = pool.apply_async(countEpisodes, obj)
+        nameplussize.append(async_result.get())
 
 
-    #size = [t.get_text() for t in soup.find_all('td', {'class':'nobr'}) ]
+
     #for table printing
-    table = [[OutColors.BW + str(i+1) + OutColors.DEFAULT if (i+1) % 2 == 0 else i+1,
-            OutColors.BW + title[i] + OutColors.DEFAULT if (i+1) % 2 == 0 else title[i],
-            OutColors.BW + size[i] + OutColors.DEFAULT if (i+1) % 2 == 0 else size[i]] for i in range(len(href))]
+    table = []
+    for index, value in enumerate(nameplussize):
+        title, size, link = value
+        #table format: index, title, size
+        if index % 2 == 0:
+            row = OutColors.BW + str(index+1) + OutColors.DEFAULT, OutColors.BW + title + OutColors.DEFAULT, OutColors.BW + size + OutColors.DEFAULT
+        else:
+            row = str(index+1), title, size
+        table.append(row)
 
     print()
     print(tabulate.tabulate(table, headers=['No.', 'Title', 'Episodes']))
@@ -205,17 +226,19 @@ def aksearch():
     print("time: " + str(spent)) #print time spent searching + counting
 
     # torrent selection
-    print('\nSelect torrent: [ 1 - ' + str(len(href)) + ' ] or [ M ] to go back to main menu or [ Q ] to quit')
+    print('\nSelect series: [ 1 - ' + str(len(nameplussize)) + ' ] or [ M ] to go back to main menu or [ Q ] to quit')
     torrent = select_torrent()
     if torrent == 'Q' or torrent == 'q':
         sys.exit(0)
     elif torrent == 'M' or torrent == 'm':
         aksearch()
     else:
-        if int(torrent) <= 0 or int(torrent) > len(href):
-            print('Use eyeglasses...')
+        if int(torrent) <= 0 or int(torrent) > len(nameplussize):
+            print('The number you wrote is not present in the list...')
         else:
-            download_all_torrents(href[int(torrent)-1])
+            quad = nameplussize.__getitem__(int(torrent)-1)
+            title, size, link in quad
+            download_all_torrents(link)
             #fname = download_torrent(href[int(torrent)-1])
             #subprocess.Popen(['xdg-open', fname], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             aksearch()
