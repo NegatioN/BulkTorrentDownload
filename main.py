@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tabulate
 import time
+import arrangeTorrents
 
 
 
@@ -74,6 +75,18 @@ def select_torrent():
     torrent = input('>> ')
     return torrent
 
+def select_resolution():
+    arr = [480, 720, 1080]
+    print("Press 1 for 480p, 2 for 720p or 3 for 1080p")
+    userin = input("select resolution >>")
+
+    if int(userin) < 4 and int(userin) > 0:
+        return userin
+    else:
+        print("Write a number 1-3")
+        select_resolution()
+
+
 #get contents of an url
 def getContents(url):
     try:
@@ -101,7 +114,7 @@ def find_torrents(link):
         newCont = getContents(url)
 
     #find a given torrent per episode for resolution-choice.
-    stringRes = input("Set resolution(480, 720 or 1080): ")
+    stringRes = select_resolution()
 
     resolution = re.compile(stringRes)
     linktitle = []
@@ -170,7 +183,6 @@ def aksearch():
     #holds all links to series in search
     href = []
 
-#producer-part
     print("searching...")
     cont = getContents(url)
     count = 0
@@ -187,6 +199,10 @@ def aksearch():
         url = url_beg + str(pageNum) + search_url + query + after_url + '/'
         cont = getContents(url)
 
+    print(len(href))
+    end = time.clock()      #time end
+    spent = end-start
+    print("time: " + str(spent)) #print time spent searching + counting
 
     # check if no torrents found
     if len(href) == 0:
@@ -197,12 +213,10 @@ def aksearch():
     #gets number of episode-links for the given series (aka episodes to download)
     nameplussize = []
     print("Counting episodes...")
-    pool = ThreadPool(processes=5) #number of threads to run.
-    holder = href
+    pool = ThreadPool(processes=10) #number of threads to run.
 
-    while(len(holder) > 0):
-        obj = holder.pop()
-        async_result = pool.apply_async(countEpisodes, obj)
+    for link in href:
+        async_result = pool.apply_async(countEpisodes, link)
         nameplussize.append(async_result.get())
 
 
@@ -238,6 +252,8 @@ def aksearch():
         else:
             quad = nameplussize.__getitem__(int(torrent)-1)
             title, size, link in quad
+            path = arrangeTorrents.createFolder(title, "torrents")
+            os.chdir(path)
             download_all_torrents(link)
             #fname = download_torrent(href[int(torrent)-1])
             #subprocess.Popen(['xdg-open', fname], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
