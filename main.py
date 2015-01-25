@@ -31,16 +31,15 @@ from queue import Queue
 #TODO implement sorting of output series-list
 #TODO optimize speed of counting, and of series searching
 
-global hrefqueue
-
-
 
 class DownloadJob(workerpool.Job):
     "Job for downloading a given URL."
-    def __init__(self, url):
+    def __init__(self, url, titlesizelink):
         self.url = url # The url we'll need to download when the job runs
+        self.titlesizelink = titlesizelink
     def run(self):
-        countEpisodes(self.url)
+        returnVal = countEpisodes(self.url)
+        self.titlesizelink.append(returnVal)
 
 #consume a series and count all episodes per thread.
 def countEpisodes(*linkarr):  #hack way of getting the object which is somehow split into an array of chars???
@@ -75,6 +74,7 @@ def countEpisodes(*linkarr):  #hack way of getting the object which is somehow s
             curSize+=1
     nameSize = name, str(curSize), link
     return nameSize
+
 
 class OutColors:
     DEFAULT = '\033[0m'
@@ -112,6 +112,7 @@ def getContents(url):
 
 def aksearch():
     hrefqueue = Queue()
+    titleSizeLink = []
 
     helper()
     pageNum = 1
@@ -141,6 +142,7 @@ def aksearch():
                 link = a.get('href')
                 if link not in href and re.search(queryInLink, link) != None:
                     href.append(link)
+                    hrefqueue.put(link)
         ##goto next page of search
         pageNum+=1
         url = url_beg + str(pageNum) + search_url + query + after_url + '/'
@@ -157,19 +159,27 @@ def aksearch():
 
     ###Do all remaining operations for all series-links gathered.
     #gets number of episode-links for the given series (aka episodes to download)
-    nameplussize = []
     print("Counting episodes...")
-    pool = ThreadPool(processes=10) #number of threads to run.
 
-    for link in href:
-        async_result = pool.apply_async(countEpisodes, link)
-        nameplussize.append(async_result.get())
+    # Initialize a pool, 5 threads in this case
+    pool = workerpool.WorkerPool(size=5)
+
+    #for link in href:
+        #async_result = pool.apply_async(countEpisodes, link)
+        #nameplussize.append(async_result.get())
+    while not hrefqueue.empty():
+        job = DownloadJob(hrefqueue.get(), titleSizeLink)
+        pool.put(job)
+
+    pool.shutdown()
+    pool.wait()
 
 
 
     #for table printing
     table = []
-    for index, value in enumerate(nameplussize):
+    #for index, value in enumerate(nameplussize):
+    for index, value in enumerate(titleSizeLink):
         title, size, link = value
         #table format: index, title, size
         if index % 2 == 0:
@@ -186,17 +196,17 @@ def aksearch():
     print("time: " + str(spent)) #print time spent searching + counting
 
     # torrent selection
-    print('\nSelect series: [ 1 - ' + str(len(nameplussize)) + ' ] or [ M ] to go back to main menu or [ Q ] to quit')
+    print('\nSelect series: [ 1 - ' + str(len(titleSizeLink)) + ' ] or [ M ] to go back to main menu or [ Q ] to quit')
     torrent = select_torrent()
     if torrent == 'Q' or torrent == 'q':
         sys.exit(0)
     elif torrent == 'M' or torrent == 'm':
         aksearch()
     else:
-        if int(torrent) <= 0 or int(torrent) > len(nameplussize):
+        if int(torrent) <= 0 or int(torrent) > len(titleSizeLink):
             print('The number you wrote is not present in the list...')
         else:
-            quad = nameplussize.__getitem__(int(torrent)-1)
+            quad = titleSizeLink.__getitem__(int(torrent)-1)
             title, size, link in quad
             path = arrangeTorrents.createFolder(title, "torrents")
             os.chdir(path)
