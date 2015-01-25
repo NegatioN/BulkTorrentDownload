@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 import re
 import os
 
+#TODO thread-optimise download of torrents and crawling of pages.
 
 class OutColors:
     DEFAULT = '\033[0m'

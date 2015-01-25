@@ -24,6 +24,7 @@ import arrangeTorrents
 import workerpool
 import downloadTorrents
 from queue import Queue
+import printFactory
 
 
 
@@ -63,6 +64,7 @@ def combineLink(*linkarr): #hack way of getting the object which is somehow spli
         link += char
     return link
 
+
 def produceHref(cont, urlarr, pageNum, href):
     limitNum = pageNum+10
     url_beg = urlarr[0]
@@ -81,21 +83,28 @@ def produceHref(cont, urlarr, pageNum, href):
                 if link not in href and re.search(queryInLink, link) != None:
                     href.append(link)
                     hrefs.append(link)
+
         pageNum+=1 ##goto next page of search
         url = url_beg + str(pageNum) + search_url + query + after_url + '/'
         cont = getContents(url)
     return hrefs
 
+def findName(*linkarr):
+    link = combineLink(*linkarr)
+    return findName(link)
+
+def findName(link):
+    #define name of the series.
+    name=link.replace("http://www.animetake.com/anime/", "")
+    name=name.replace("-", " ")
+    name=name.replace("/", "")
+    return name
 
 #consume a series and count all episodes per thread.
 def countEpisodes(*linkarr):
     link = combineLink(*linkarr)
 
-    #define name of the series.
-    name=link.replace("http://www.animetake.com/anime/", "")
-    name=name.replace("-", " ")
-    name=name.replace("/", "")
-
+    name = findName(link)
 
     seriesPageNum = 1
     url = link + 'page/' + str(seriesPageNum)
@@ -115,9 +124,8 @@ def countEpisodes(*linkarr):
     for ul in newSoup.find_all("ul", {'class': 'catg_list'}):
         for li in ul.findAll('li'):
             curSize+=1
-    nameSize = name, str(curSize), link
+    nameSize = name, link, str(curSize)
     return nameSize
-
 
 
 class OutColors:
@@ -125,24 +133,6 @@ class OutColors:
     BW = '\033[1m'
     LG = '\033[0m\033[32m'
     LR = '\033[0m\033[31m'
-
-def helper():
-    print(OutColors.DEFAULT + "\nSearch torrents from Animetake.com")
-
-def select_torrent():
-    torrent = input('>> ')
-    return torrent
-
-def select_resolution():
-    arr = [480, 720, 1080]
-    print("Press 1 for 480p, 2 for 720p or 3 for 1080p")
-    userin = input("select resolution >>")
-
-    if int(userin) < 4 and int(userin) > 0:
-        return userin
-    else:
-        print("Write a number 1-3")
-        select_resolution()
 
 
 #get contents of an url
@@ -156,11 +146,11 @@ def getContents(url):
 
 def aksearch():
     hrefqueue = Queue() #holds all links to series yielded by search
-    titleSizeLink = [] #holds name, num of episodes, link to series.
     href = []
 
+    printFactory.helper()
+    checkCount = printFactory.select_check_epcount()
 
-    helper()
     pageNum = 1
     url_beg = 'http://www.animetake.com/page/'
     search_url = '?s='
@@ -197,61 +187,45 @@ def aksearch():
     spent = end-start
     print("time: " + str(spent)) #print time spent searching + counting
 
-    ###Do all remaining operations for all series-links gathered.
-    #gets number of episode-links for the given series (aka episodes to download)
-    print("Counting episodes...")
-
-    pool = workerpool.WorkerPool(size=5) # Initialize a pool of 5 threads
-
-    while not hrefqueue.empty():
-        job = CountJob(hrefqueue.get(), titleSizeLink)
-        pool.put(job)
-
-    pool.shutdown()
-    pool.wait()
-
-
-
     # check if no torrents found
     if len(href) == 0:
         print('Series found: 0')
         aksearch()
 
-    #for table printing
-    table = []
-    for index, value in enumerate(titleSizeLink):
-        title, size, link = value
-        #table format: index, title, size
-        if index % 2 == 0:
-            row = OutColors.BW + str(index+1) + OutColors.DEFAULT, OutColors.BW + title + OutColors.DEFAULT, OutColors.BW + size + OutColors.DEFAULT
-        else:
-            row = str(index+1), title, size
-        table.append(row)
+    ###Do all remaining operations for all series-links gathered.
+    if checkCount:
+        titleSizeLink = [] #holds name, num of episodes, link to series.
+        #gets number of episode-links for the given series (aka episodes to download)
+        print("Counting episodes...")
+        pool = workerpool.WorkerPool(size=5) # Initialize a pool of 5 threads
+        while not hrefqueue.empty():
+            job = CountJob(hrefqueue.get(), titleSizeLink)
+            pool.put(job)
 
-    print()
-    print(tabulate.tabulate(table, headers=['No.', 'Title', 'Episodes']))
+        pool.shutdown()
+        pool.wait()
+
+        #print table
+        printFactory.printTitleSize(titleSizeLink)
+        printFactory.finalize(titleSizeLink)
+    else:
+        #finds names of all the series
+        names = []
+        while not hrefqueue.empty():
+            href = hrefqueue.get()
+            name = findName(href)
+            titlelink = name, href
+            names.append(titlelink)
+        #print table
+        printFactory.printTitle(names)
+        printFactory.finalize(names)
+
+    aksearch()
 
     end = time.clock()      #time end
     spent = end-start
     print("time: " + str(spent)) #print time spent searching + counting
 
-    # torrent selection
-    print('\nSelect series: [ 1 - ' + str(len(titleSizeLink)) + ' ] or [ M ] to go back to main menu or [ Q ] to quit')
-    torrent = select_torrent()
-    if torrent == 'Q' or torrent == 'q':
-        sys.exit(0)
-    elif torrent == 'M' or torrent == 'm':
-        aksearch()
-    else:
-        if int(torrent) <= 0 or int(torrent) > len(titleSizeLink):
-            print('The number you wrote is not present in the list...')
-        else:
-            quad = titleSizeLink.__getitem__(int(torrent)-1)
-            title, size, link in quad
-            path = arrangeTorrents.createFolder(title, "torrents")
-            os.chdir(path)
-            downloadTorrents.download_all_torrents(link)
-            aksearch()
 
 
 if __name__ == '__main__':
@@ -259,3 +233,4 @@ if __name__ == '__main__':
         aksearch()
     except KeyboardInterrupt:
         print('\nHuha!')
+
