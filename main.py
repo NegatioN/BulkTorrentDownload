@@ -29,23 +29,67 @@ from queue import Queue
 
 #TODO implement graphical progress-bar?
 #TODO implement sorting of output series-list
-#TODO optimize speed of counting, and of series searching
+#TODO optimize speed of series searching
 
 
-class DownloadJob(workerpool.Job):
-    "Job for downloading a given URL."
+class CountJob(workerpool.Job):
+    "Job for counting episodes in a given series"
     def __init__(self, url, titlesizelink):
         self.url = url # The url we'll need to download when the job runs
-        self.titlesizelink = titlesizelink
+        self.titlesizelink = titlesizelink #array for keeping track of name, size and link
     def run(self):
         returnVal = countEpisodes(self.url)
         self.titlesizelink.append(returnVal)
 
-#consume a series and count all episodes per thread.
-def countEpisodes(*linkarr):  #hack way of getting the object which is somehow split into an array of chars???
+class ProduceHrefJob(workerpool.Job):
+    #Job for getting the next Href for a search of series
+    #e.g. pagenum 1,2,3,4,5 of search
+    def __init__(self, cont, urlarr, pagenum, hrefqueue, href):
+        self.hrefqueue = hrefqueue
+        self.pagenum = pagenum #which pagenum to start checking.
+        self.cont = cont
+        self.href = href
+        self.urlarr = urlarr
+    def run(self):
+        returnHrefs = produceHref(self.cont, self.urlarr, self.pagenum,self.href)
+
+        for returnhref in returnHrefs:
+            self.hrefqueue.put(returnhref)
+
+
+def combineLink(*linkarr): #hack way of getting the object which is somehow split into an array of chars???
     link = ""
     for char in linkarr:
         link += char
+    return link
+
+def produceHref(cont, urlarr, pageNum, href):
+    limitNum = pageNum+10
+    url_beg = urlarr[0]
+    search_url = urlarr[1]
+    query = urlarr[2]
+    after_url = urlarr[3]
+    queryInLink = urlarr[4]
+
+    hrefs = []
+    while cont.status_code != 404 and pageNum < limitNum:
+        soup = BeautifulSoup(cont.content)
+
+        for a in soup.find_all('a', href=re.compile(r'http://www.animetake.com/anime/')):
+            if a.parent.name != 'li':
+                link = a.get('href')
+                if link not in href and re.search(queryInLink, link) != None:
+                    href.append(link)
+                    hrefs.append(link)
+        pageNum+=1 ##goto next page of search
+        url = url_beg + str(pageNum) + search_url + query + after_url + '/'
+        cont = getContents(url)
+    return hrefs
+
+
+#consume a series and count all episodes per thread.
+def countEpisodes(*linkarr):
+    link = combineLink(*linkarr)
 
     #define name of the series.
     name=link.replace("http://www.animetake.com/anime/", "")
@@ -62,7 +106,6 @@ def countEpisodes(*linkarr):  #hack way of getting the object which is somehow s
     while nextCont.status_code != 404:
         newCont = nextCont
         newSoup = BeautifulSoup(newCont.content)
-
         seriesPageNum+=1
         url = link + 'page/' + str(seriesPageNum)
         nextCont = getContents(url)
@@ -74,6 +117,7 @@ def countEpisodes(*linkarr):  #hack way of getting the object which is somehow s
             curSize+=1
     nameSize = name, str(curSize), link
     return nameSize
+
 
 
 class OutColors:
@@ -111,14 +155,17 @@ def getContents(url):
 
 
 def aksearch():
-    hrefqueue = Queue()
-    titleSizeLink = []
+    hrefqueue = Queue() #holds all links to series yielded by search
+    titleSizeLink = [] #holds name, num of episodes, link to series.
+    href = []
+
 
     helper()
     pageNum = 1
     url_beg = 'http://www.animetake.com/page/'
     search_url = '?s='
     after_url = '&x=0&y=0'
+
 
     query = input('Type query: ')
     start = time.clock()
@@ -128,47 +175,36 @@ def aksearch():
     url = url_beg + str(pageNum) + search_url + query + after_url
     queryInLink = query.replace("+", "-")
 
-    #holds all links to series in search
-    href = []
-
+    urlarr = [url_beg, search_url, query, after_url, queryInLink]
     print("searching...")
     cont = getContents(url)
 
-    while cont.status_code != 404:
-        soup = BeautifulSoup(cont.content)
+    pool = workerpool.WorkerPool(size=5)
 
-        for a in soup.find_all('a', href=re.compile(r'http://www.animetake.com/anime/')):
-            if a.parent.name != 'li':
-                link = a.get('href')
-                if link not in href and re.search(queryInLink, link) != None:
-                    href.append(link)
-                    hrefqueue.put(link)
-        ##goto next page of search
-        pageNum+=1
+    #checks every tenth page, and uses threads to check the subsequent pages
+    while cont.status_code != 404:
+        job = ProduceHrefJob(cont, urlarr,pageNum,hrefqueue, href)
+        pool.put(job)
+
+        pageNum+=10
         url = url_beg + str(pageNum) + search_url + query + after_url + '/'
         cont = getContents(url)
+
+    pool.shutdown()
+    pool.wait()
 
     end = time.clock()      #time end
     spent = end-start
     print("time: " + str(spent)) #print time spent searching + counting
 
-    # check if no torrents found
-    if len(href) == 0:
-        print('Series found: 0')
-        aksearch()
-
     ###Do all remaining operations for all series-links gathered.
     #gets number of episode-links for the given series (aka episodes to download)
     print("Counting episodes...")
 
-    # Initialize a pool, 5 threads in this case
-    pool = workerpool.WorkerPool(size=5)
+    pool = workerpool.WorkerPool(size=5) # Initialize a pool of 5 threads
 
-    #for link in href:
-        #async_result = pool.apply_async(countEpisodes, link)
-        #nameplussize.append(async_result.get())
     while not hrefqueue.empty():
-        job = DownloadJob(hrefqueue.get(), titleSizeLink)
+        job = CountJob(hrefqueue.get(), titleSizeLink)
         pool.put(job)
 
     pool.shutdown()
@@ -176,9 +212,13 @@ def aksearch():
 
 
 
+    # check if no torrents found
+    if len(href) == 0:
+        print('Series found: 0')
+        aksearch()
+
     #for table printing
     table = []
-    #for index, value in enumerate(nameplussize):
     for index, value in enumerate(titleSizeLink):
         title, size, link = value
         #table format: index, title, size
@@ -211,8 +251,6 @@ def aksearch():
             path = arrangeTorrents.createFolder(title, "torrents")
             os.chdir(path)
             downloadTorrents.download_all_torrents(link)
-            #fname = download_torrent(href[int(torrent)-1])
-            #subprocess.Popen(['xdg-open', fname], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             aksearch()
 
 
