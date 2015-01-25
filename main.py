@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-from multiprocessing.pool import ThreadPool
 
 __author__ = 'Joakim Rishaug'
 
@@ -13,20 +12,35 @@ __author__ = 'Joakim Rishaug'
 # beautifulSoup4: https://pypi.python.org/pypi/beautifulsoup4/4.3.2
 # tabulate: https://pypi.python.org/pypi/tabulate
 
+from multiprocessing.pool import ThreadPool
 from bs4 import BeautifulSoup
 import os
 import re
 import requests
-import subprocess
 import sys
 import tabulate
 import time
 import arrangeTorrents
+import workerpool
+import downloadTorrents
+from queue import Queue
 
 
 
 #TODO implement graphical progress-bar?
 #TODO implement sorting of output series-list
+#TODO optimize speed of counting, and of series searching
+
+global hrefqueue
+
+
+
+class DownloadJob(workerpool.Job):
+    "Job for downloading a given URL."
+    def __init__(self, url):
+        self.url = url # The url we'll need to download when the job runs
+    def run(self):
+        countEpisodes(self.url)
 
 #consume a series and count all episodes per thread.
 def countEpisodes(*linkarr):  #hack way of getting the object which is somehow split into an array of chars???
@@ -94,78 +108,11 @@ def getContents(url):
     except requests.exceptions.RequestException as e:
         raise SystemExit('\n' + OutColors.LR + str(e))
     return cont
-def find_torrents(link):
-    torrent_links = []
-    seriesPageNum = 1
-    url = link + 'page/' + str(seriesPageNum)
-    newCont = getContents(url)
-
-    #finds all pages with selection of torrents for given episode.
-    while newCont.status_code != 404:
-        newSoup = BeautifulSoup(newCont.content)
-        ### Counts the number of episodes on the current series site
-        ul =  newSoup.find_all("ul", {'class': 'catg_list'})
-        for uls in ul:
-            for a in uls.findAll('a'):
-                torrent_links.append(a['href'])
-
-        seriesPageNum+=1
-        url = link + 'page/' + str(seriesPageNum)
-        newCont = getContents(url)
-
-    #find a given torrent per episode for resolution-choice.
-    stringRes = select_resolution()
-
-    resolution = re.compile(stringRes)
-    linktitle = []
-    for link in torrent_links:
-        newCont = getContents(link)
-        newSoup = BeautifulSoup(newCont.content)
-        ul =  newSoup.find_all("ul", {'class': 'catg_list'})
-        for uls in ul:
-            for a in uls.findAll('a'):
-                #gets the first torrent that matches resolution setting
-                if resolution.search(str(a.string)) and a.has_attr("href"):
-                    var = a['href']
-                    var = var.replace(" ", "")
-                    titlelink = a.next, var
-                    linktitle.append(titlelink)
-
-                    #TODO download the file while finding it. Thereby making sure we can download an alternative version if
-                    #we can't get the specified resolution.
-                    break
-    print(str(linktitle))
-    return linktitle
-
-def download_all_torrents(link):
-    print("Finding torrents...")
-    torrentTuples = find_torrents(link)
-    print("Downloading Torrents...")
-    title = 0
-    url = 0
-    for title, url in torrentTuples:
-        download_torrent(title, url)
-
-
-def download_torrent(title, url):
-    print(OutColors.BW + 'Downloading >> ' + title)
-    fname = os.getcwd() + '/' + title + '.torrent'
-    # http://stackoverflow.com/a/14114741/1302018
-    try:
-        r = requests.get(url, stream=True)
-        with open(fname, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=1024):
-                if chunk:
-                    f.write(chunk)
-                    f.flush()
-    except requests.exceptions.RequestException as e:
-        print('\n' + OutColors.LR + str(e) + '\nSomething went wrong with file: ' + title)
-        print("Failed. Trying next torrent.")
-
-    return fname
 
 
 def aksearch():
+    hrefqueue = Queue()
+
     helper()
     pageNum = 1
     url_beg = 'http://www.animetake.com/page/'
@@ -185,7 +132,7 @@ def aksearch():
 
     print("searching...")
     cont = getContents(url)
-    count = 0
+
     while cont.status_code != 404:
         soup = BeautifulSoup(cont.content)
 
@@ -199,7 +146,6 @@ def aksearch():
         url = url_beg + str(pageNum) + search_url + query + after_url + '/'
         cont = getContents(url)
 
-    print(len(href))
     end = time.clock()      #time end
     spent = end-start
     print("time: " + str(spent)) #print time spent searching + counting
@@ -254,7 +200,7 @@ def aksearch():
             title, size, link in quad
             path = arrangeTorrents.createFolder(title, "torrents")
             os.chdir(path)
-            download_all_torrents(link)
+            downloadTorrents.download_all_torrents(link)
             #fname = download_torrent(href[int(torrent)-1])
             #subprocess.Popen(['xdg-open', fname], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             aksearch()
